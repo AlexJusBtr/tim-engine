@@ -1,0 +1,43 @@
+.NET and MSBuild build output folders
+
+[Bb]in/
+[Oo]bj/
+
+Visual Studio / VS Code configuration & cache
+
+.vs/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+Generated project assets and NuGet caches
+
+project.lock.json
+project.assets.json
+*.nuget.props
+*.nuget.targets
+
+Build binaries and debug symbols
+
+*.dll
+*.exe
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+
+Large auto-generated test datasets (keep the base CSVs tracked)
+
+domain_list_10k.csv
+
+OS files
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

@@ -25,9 +25,9 @@ namespace TIMShield
         private readonly float[] _baseFrequencies;
         private readonly float[] _phaseOffsets;
         private readonly Random _random = new Random(42);
-        private ComputeContext _context;
-        private ComputeCommandQueue _queue;
-        private ComputeProgram _program;
+        private ComputeContext _context = null!;
+        private ComputeCommandQueue _queue = null!;
+        private ComputeProgram _program = null!;
         private readonly bool _isMalware;
         private readonly bool _verbose;
         private int _maxLength;
@@ -104,7 +104,7 @@ namespace TIMShield
             catch (ComputeException)
             {
                 string buildLog = string.Join("\n", _context.Devices.Select(d => $"Device {d.Name}: {_program.GetBuildLog(d)}"));
-                Debug($"OpenCL build error details:\n{buildLog}");
+                Console.WriteLine($"\n[OpenCL Build Error Log]:\n{buildLog}\n");
                 throw;
             }
         }
@@ -160,11 +160,11 @@ namespace TIMShield
                 throw new InvalidOperationException("Buffer size exceeds GPU memory limit.");
             }
 
-            ComputeBuffer<byte> inputBuffer = null;
-            ComputeBuffer<float> embeddingsBuffer = null;
-            ComputeBuffer<float> frequenciesBuffer = null;
-            ComputeBuffer<float> offsetsBuffer = null;
-            ComputeKernel kernel = null;
+            ComputeBuffer<byte>? inputBuffer = null;
+            ComputeBuffer<float>? embeddingsBuffer = null;
+            ComputeBuffer<float>? frequenciesBuffer = null;
+            ComputeBuffer<float>? offsetsBuffer = null;
+            ComputeKernel? kernel = null;
 
             try
             {
@@ -235,12 +235,12 @@ namespace TIMShield
             for (int pos = 0; pos < maxLength && pos < input.Length && input[pos] != '\0'; pos++)
             {
                 char c = input[pos];
-                float charValue = _isMalware ? (float)c : DataLoader.DomainAlphabet.IndexOf(c);
+                float charValue = _isMalware ? (float)(byte)c : DataLoader.DomainAlphabet.IndexOf(c);
                 if (charValue < 0.0f) continue;
 
                 validChars++;
                 float charFrequency = charValue * (_isMalware ? 0.1f : 0.2f);
-                float positionPhase = pos * (float)Math.PI / maxLength;
+                float positionPhase = pos * (float)Math.PI / (float)maxLength;
                 float lengthScale = maxLength < 50 ? 1.5f : 1.0f;
                 float posWeight = (1.0f + pos * 0.05f) * lengthScale;
 
@@ -280,10 +280,6 @@ namespace TIMShield
             };
         }
 
-        /// <summary>
-        /// Selects the top-K dimensions by absolute magnitude in the normalized embedding vector
-        /// to act as coarse inverted-index bucket keys.
-        /// </summary>
         private static int[] SelectTopDimensions(float[] embedding, int k)
         {
             return Enumerable.Range(0, embedding.Length)
@@ -311,17 +307,19 @@ namespace TIMShield
                     for (int d = 0; d < Dimensions; d++) vec[d] = 0.0f;
 
                     int validChars = 0;
+                    int inputOffset = idx * maxLength;
+
                     for (int pos = 0; pos < maxLength; pos++)
                     {
-                        char c = input[idx * maxLength + pos];
-                        if (c == ' ') break;
+                        char c = input[inputOffset + pos];
+                        if (c == 0) break;
 
-                        float charValue = (float)c;
+                        float charValue = (float)((unsigned char)c);
                         validChars++;
                         float charFrequency = charValue * 0.1f;
-                        float positionPhase = pos * 3.1415926f / maxLength;
+                        float positionPhase = (float)pos * 3.14159265f / (float)maxLength;
                         float lengthScale = maxLength < 50 ? 1.5f : 1.0f;
-                        float posWeight = (1.0f + pos * 0.05f) * lengthScale;
+                        float posWeight = (1.0f + (float)pos * 0.05f) * lengthScale;
 
                         for (int d = 0; d < Dimensions; d++)
                         {
@@ -345,6 +343,16 @@ namespace TIMShield
                         embeddings[idx * Dimensions + d] = vec[d] / magnitude;
                 }"
             : @"
+                inline float get_char_value(char c)
+                {
+                    if (c >= 'a' && c <= 'z') return (float)(c - 'a');
+                    if (c >= '0' && c <= '9') return (float)(c - '0' + 26);
+                    if (c == '-') return 36.0f;
+                    if (c == '.') return 37.0f;
+                    if (c == '@') return 38.0f;
+                    return -1.0f;
+                }
+
                 __kernel void encodeKernel(
                     __global const char* input,
                     __global float* embeddings,
@@ -361,31 +369,21 @@ namespace TIMShield
                     for (int d = 0; d < Dimensions; d++) vec[d] = 0.0f;
 
                     int validChars = 0;
-                    __constant char alphabet[] = ""abcdefghijklmnopqrstuvwxyz0123456789-.@"";
-                    const int alphabetSize = 39;
                     int inputOffset = idx * maxLength;
 
                     for (int pos = 0; pos < maxLength; pos++)
                     {
                         char c = input[inputOffset + pos];
-                        if (c == ' ') break;
+                        if (c == 0) break;
 
-                        float charValue = -1.0f;
-                        for (int i = 0; i < alphabetSize; i++)
-                        {
-                            if (c == alphabet[i])
-                            {
-                                charValue = (float)i;
-                                break;
-                            }
-                        }
+                        float charValue = get_char_value(c);
                         if (charValue < 0.0f) continue;
 
                         validChars++;
                         float charFrequency = charValue * 0.2f;
-                        float positionPhase = pos * 3.1415926f / maxLength;
+                        float positionPhase = (float)pos * 3.14159265f / (float)maxLength;
                         float lengthScale = maxLength < 50 ? 1.5f : 1.0f;
-                        float posWeight = (1.0f + pos * 0.05f) * lengthScale;
+                        float posWeight = (1.0f + (float)pos * 0.05f) * lengthScale;
 
                         for (int d = 0; d < Dimensions; d++)
                         {
@@ -418,10 +416,8 @@ namespace TIMShield
                 ? query.Trim().ToLowerInvariant()
                 : new string(query.ToLowerInvariant().Where(c => DataLoader.DomainAlphabet.Contains(c)).ToArray());
 
-            // Encode single query string directly on CPU (avoids PCIe buffer allocation overhead for 1 item)
             var queryRecord = EncodeSingleCpu(cleanedQuery, _maxLength);
 
-            // Coarse candidate filtering via inverted index
             var sharedBucketCounts = new int[_items.Count];
             var candidateSet = new List<int>(_items.Count / 10);
 
@@ -440,9 +436,8 @@ namespace TIMShield
                 }
             }
 
-            double evaluatedPercentage = (double)candidateSet.Count / _items.Count * 100.0;
-            Info($"Candidates passing bucket filter: {candidateSet.Count:N0} / {_items.Count:N0} ({evaluatedPercentage:F2}% of dataset)");
-
+            double evaluatedPercentage = _items.Count > 0 ? (double)candidateSet.Count / _items.Count * 100.0 : 0.0;
+            Debug($"Candidates passing bucket filter: {candidateSet.Count:N0} / {_items.Count:N0} ({evaluatedPercentage:F2}% of dataset)");
             var topCandidates = new List<(float Similarity, int Index)>();
             int candidatesAboveThreshold = 0;
 
@@ -480,9 +475,6 @@ namespace TIMShield
             return results;
         }
 
-        /// <summary>
-        /// Computes cosine similarity between two unit-normalized vectors via dot product.
-        /// </summary>
         private float DotProduct(float[] a, float[] b)
         {
             float sum = 0.0f;
